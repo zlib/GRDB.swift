@@ -527,6 +527,51 @@ extension Publisher where Failure == Error {
 }
 #endif
 
+
+// MARK: - Async
+
+#if swift(>=5.5)
+@available(macOS 12, iOS 15, tvOS 15, watchOS 8, *)
+extension DatabaseWriter {
+    public func write<T>(updates: @escaping (Database) throws -> T) async throws -> T {
+        try await withUnsafeThrowingContinuation { continuation in
+            asyncWrite(updates) { _, result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+    
+    public func write<T, Output>(
+        updates: @escaping (Database) throws -> T,
+        thenRead value: @escaping (Database, T) throws -> Output)
+    async throws -> Output
+    {
+        try await withUnsafeThrowingContinuation { continuation in
+            asyncWriteWithoutTransaction { db in
+                var updatesValue: T?
+                do {
+                    try db.inTransaction {
+                        updatesValue = try updates(db)
+                        return .commit
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                
+                self.spawnConcurrentRead { dbResult in
+                    do {
+                        try continuation.resume(returning: value(dbResult.get(), updatesValue!))
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
+
 /// A future database value, returned by the DatabaseWriter.concurrentRead(_:)
 /// method.
 ///

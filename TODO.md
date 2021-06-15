@@ -15,6 +15,8 @@
 
 ## Features
 
+- [ ] async read/write
+- [ ] async cancellation
 - [ ] Direct access to statement for bindings
 - [ ] Breaking: make `fetchOne(key:)` type-safe (have a single dedicated primary key type)
 - [ ] Property wrapper that decodes dictionaries (but how to tell the key column?)

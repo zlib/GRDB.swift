@@ -1,7 +1,25 @@
+import CoreData
 import XCTest
 import GRDB
 
 class DatabaseReaderTests : GRDBTestCase {
+    
+    func asyncFoo(moc: NSManagedObjectContext) async {
+        guard #available(iOS 15.0, *) else {
+            return
+        }
+        await moc.perform { }
+        await moc.perform(schedule: .immediate) { }
+        await moc.perform(schedule: .enqueued) { }
+    }
+    
+    func syncFoo(moc: NSManagedObjectContext) {
+        moc.perform { }
+    }
+    
+    func foo(moc: NSManagedObjectContext) {
+        moc.perform { }
+    }
     
     func testAnyDatabaseReader() {
         // This test passes if this code compiles.
@@ -158,6 +176,42 @@ class DatabaseReaderTests : GRDBTestCase {
         try test(makeDatabasePool())
         try test(makeDatabasePool().makeSnapshot())
     }
+    
+    // MARK: - Async/Await
+    
+#if swift(>=5.5)
+    @available(macOS 12, iOS 15, tvOS 15, watchOS 8, *)
+    func testAsyncAwaitRead() async throws {
+        func test(_ dbReader: DatabaseReader) async throws {
+            let count = try await dbReader.read { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM sqlite_master")
+            }
+            XCTAssertNotNil(count)
+        }
+        
+        try await test(makeDatabaseQueue())
+        try await test(makeDatabasePool())
+        try await test(makeDatabasePool().makeSnapshot())
+    }
+    
+    @available(macOS 12, iOS 15, tvOS 15, watchOS 8, *)
+    func testAsyncAwaitReadPreventsDatabaseModification() async throws {
+        func test(_ dbReader: DatabaseReader) async throws {
+            do {
+                try await dbReader.read { db in
+                    try db.execute(sql: "CREATE TABLE testAsyncReadPreventsDatabaseModification (a)")
+                }
+                XCTFail("Expected error")
+            } catch let error as DatabaseError {
+                XCTAssertEqual(error.resultCode, .SQLITE_READONLY)
+            }
+        }
+        
+        try await test(makeDatabaseQueue())
+        try await test(makeDatabasePool())
+        try await test(makeDatabasePool().makeSnapshot())
+    }
+#endif
     
     // MARK: - Function
     
