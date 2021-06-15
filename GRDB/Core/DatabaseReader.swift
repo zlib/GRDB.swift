@@ -87,11 +87,11 @@ public protocol DatabaseReader: AnyObject {
     
     // MARK: - Read From Database
     
-    /// Synchronously executes a read-only block that takes a database
+    /// Synchronously executes a read-only function that accepts a database
     /// connection, and returns its result.
     ///
-    /// Guarantee 1: the block argument is isolated. Eventual concurrent
-    /// database updates are not visible inside the block:
+    /// Guarantee 1: the `value` function runs in an isolated fashion: eventual
+    /// concurrent database updates are not visible from the function:
     ///
     ///     try reader.read { db in
     ///         // Those two values are guaranteed to be equal, even if the
@@ -108,18 +108,19 @@ public protocol DatabaseReader: AnyObject {
     /// Guarantee 2: attempts to write in the database throw a DatabaseError
     /// whose resultCode is `SQLITE_READONLY`.
     ///
-    /// - parameter block: A block that accesses the database.
-    /// - throws: The error thrown by the block, or any DatabaseError that would
+    /// - parameter value: A function that accesses the database.
+    /// - throws: The error thrown by `value`, or any `DatabaseError` that would
     ///   happen while establishing the read access to the database.
-    func read<T>(_ block: (Database) throws -> T) throws -> T
+    @_disfavoredOverload
+    func read<T>(_ value: (Database) throws -> T) throws -> T
     
-    /// Asynchronously executes a read-only block that takes a
+    /// Asynchronously executes a read-only function that accepts a
     /// database connection.
     ///
-    /// Guarantee 1: the block argument is isolated. Eventual concurrent
-    /// database updates are not visible inside the block:
+    /// Guarantee 1: the `value` function runs in an isolated fashion: eventual
+    /// concurrent database updates are not visible from the function:
     ///
-    ///     try reader.asyncRead { dbResult in
+    ///     reader.asyncRead { dbResult in
     ///         do {
     ///             let db = try dbResult.get()
     ///             // Those two values are guaranteed to be equal, even if the
@@ -134,8 +135,10 @@ public protocol DatabaseReader: AnyObject {
     /// Guarantee 2: attempts to write in the database throw a DatabaseError
     /// whose resultCode is `SQLITE_READONLY`.
     ///
-    /// - parameter block: A block that accesses the database.
-    func asyncRead(_ block: @escaping (Result<Database, Error>) -> Void)
+    /// - parameter value: A function that accesses the database. Its argument
+    ///   is a `Result` that provides the database connection, or the failure
+    ///   that would prevent establishing the read access to the database.
+    func asyncRead(_ value: @escaping (Result<Database, Error>) -> Void)
     
     /// Same as asyncRead, but without retaining self
     ///
@@ -171,7 +174,39 @@ public protocol DatabaseReader: AnyObject {
     /// - parameter block: A block that accesses the database.
     /// - throws: The error thrown by the block, or any DatabaseError that would
     ///   happen while establishing the read access to the database.
+    @_disfavoredOverload
     func unsafeRead<T>(_ block: (Database) throws -> T) throws -> T
+    
+    /// Asynchronously executes a read-only block that takes a database
+    /// connection, and returns its result.
+    ///
+    /// The two guarantees of the safe `asyncRead` method are lifted:
+    ///
+    /// The block argument is not isolated: eventual concurrent database updates
+    /// are visible inside the block:
+    ///
+    ///     try reader.unsafeRead { db in
+    ///         // Those two values may be different because some other thread
+    ///         // may have inserted or deleted a player between the two requests:
+    ///         let count1 = try Player.fetchCount(db)
+    ///         let count2 = try Player.fetchCount(db)
+    ///     }
+    ///
+    /// Cursor iterations are isolated, though:
+    ///
+    ///     try reader.unsafeRead { db in
+    ///         // No concurrent update can mess with this iteration:
+    ///         let rows = try Row.fetchCursor(db, sql: "SELECT ...")
+    ///         while let row = try rows.next() { ... }
+    ///     }
+    ///
+    /// The block argument is not prevented from writing (DatabaseQueue, in
+    /// particular, will accept database modifications in `unsafeRead`).
+    ///
+    /// - parameter block: A block that accesses the database.
+    /// - throws: The error thrown by the block, or any DatabaseError that would
+    ///   happen while establishing the read access to the database.
+    func asyncUnsafeRead(_ block: @escaping (Result<Database, Error>) -> Void)
     
     /// Synchronously executes a block that takes a database connection, and
     /// returns its result.
@@ -225,6 +260,50 @@ public protocol DatabaseReader: AnyObject {
         onChange: @escaping (Reducer.Value) -> Void)
     -> DatabaseCancellable
 }
+
+#if swift(>=5.5)
+extension DatabaseReader {
+    
+    // MARK: - Asynchronous Read From Database
+    
+    /// Executes a read-only block that takes a database connection, and returns
+    /// its result.
+    ///
+    /// Guarantee 1: the block argument is isolated. Eventual concurrent
+    /// database updates are not visible inside the block:
+    ///
+    ///     await try reader.read { db in
+    ///         // Those two values are guaranteed to be equal, even if the
+    ///         // `player` table is modified between the two requests:
+    ///         let count1 = try Player.fetchCount(db)
+    ///         let count2 = try Player.fetchCount(db)
+    ///     }
+    ///
+    ///     await try reader.read { db in
+    ///         // Now this value may be different:
+    ///         let count = try Player.fetchCount(db)
+    ///     }
+    ///
+    /// Guarantee 2: attempts to write in the database throw a DatabaseError
+    /// whose resultCode is `SQLITE_READONLY`.
+    ///
+    /// - parameter value: A function that accesses the database.
+    /// - throws: The error thrown by `value`, or any `DatabaseError` that would
+    ///   happen while establishing the read access to the database.
+    @available(macOS 12, iOS 15, tvOS 15, watchOS 8, *)
+    func read<T>(_ignored: Void = (), _ value: @escaping (Database) throws -> T) async throws -> T {
+        try await withUnsafeThrowingContinuation { continuation in
+            asyncRead { result in
+                do {
+                    try continuation.resume(returning: value(result.get()))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+}
+#endif
 
 extension DatabaseReader {
     

@@ -40,6 +40,7 @@ public protocol DatabaseWriter: DatabaseReader {
     /// - parameter updates: The updates to the database.
     /// - throws: The error thrown by the updates, or by the
     ///   wrapping transaction.
+    @_disfavoredOverload
     func write<T>(_ updates: (Database) throws -> T) throws -> T
     
     /// Synchronously executes database updates in a protected dispatch queue,
@@ -55,6 +56,7 @@ public protocol DatabaseWriter: DatabaseReader {
     ///
     /// - parameter updates: The updates to the database.
     /// - throws: The error thrown by the updates.
+    @_disfavoredOverload
     func writeWithoutTransaction<T>(_ updates: (Database) throws -> T) rethrows -> T
     
     /// Synchronously executes database updates in a protected dispatch queue,
@@ -68,6 +70,7 @@ public protocol DatabaseWriter: DatabaseReader {
     ///
     /// - parameter updates: The updates to the database.
     /// - throws: The error thrown by the updates.
+    @_disfavoredOverload
     func barrierWriteWithoutTransaction<T>(_ updates: (Database) throws -> T) rethrows -> T
     
     /// Asynchronously executes database updates in a protected dispatch queue,
@@ -164,6 +167,7 @@ public protocol DatabaseWriter: DatabaseReader {
     ///         // Guaranteed to be zero
     ///         let count = try future.wait()
     ///     }
+    @_disfavoredOverload
     func concurrentRead<T>(_ block: @escaping (Database) throws -> T) -> DatabaseFuture<T>
     
     // Exposed for RxGRDB and GRBCombine. Naming is not stabilized.
