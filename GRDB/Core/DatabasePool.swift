@@ -451,6 +451,30 @@ extension DatabasePool: DatabaseReader {
         }
     }
     
+    public func asyncUnsafeRead(_ block: @escaping (Result<Database, Error>) -> Void) {
+        // First async jump in order to grab a reader connection.
+        // Honor configuration dispatching (qos/targetQueue).
+        let label = configuration.identifier(
+            defaultLabel: "GRDB.DatabasePool",
+            purpose: "asyncRead")
+        configuration
+            .makeDispatchQueue(label: label)
+            .async {
+                do {
+                    let (reader, releaseReader) = try self.readerPool.get()
+                    
+                    // Second async jump because sync could deadlock if
+                    // configuration has a serial targetQueue.
+                    reader.async { db in
+                        block(.success(db))
+                        releaseReader()
+                    }
+                } catch {
+                    block(.failure(error))
+                }
+            }
+    }
+    
     /// Synchronously executes a read-only block in a protected dispatch queue,
     /// and returns its result.
     ///

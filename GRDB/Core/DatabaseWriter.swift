@@ -35,7 +35,13 @@ public protocol DatabaseWriter: DatabaseReader {
     /// Eventual concurrent reads are guaranteed to not see any partial updates
     /// of the database until the transaction has completed.
     ///
-    /// This method is *not* reentrant.
+    /// It is a programmer error to call this method from another database
+    /// access method:
+    ///
+    ///     try writer.write { db in
+    ///         // Raises a fatal error
+    ///         try writer.write { ... )
+    ///     }
     ///
     /// - parameter updates: The updates to the database.
     /// - throws: The error thrown by the updates, or by the
@@ -52,7 +58,13 @@ public protocol DatabaseWriter: DatabaseReader {
     /// Eventual concurrent reads may see partial updates unless you wrap them
     /// in a transaction.
     ///
-    /// This method is *not* reentrant.
+    /// It is a programmer error to call this method from another database
+    /// access method:
+    ///
+    ///     try writer.write { db in
+    ///         // Raises a fatal error
+    ///         try writer.writeWithoutTransaction { ... )
+    ///     }
     ///
     /// - parameter updates: The updates to the database.
     /// - throws: The error thrown by the updates.
@@ -66,7 +78,13 @@ public protocol DatabaseWriter: DatabaseReader {
     /// until all pending writes and reads are completed. They postpone all
     /// other writes and reads until they are completed.
     ///
-    /// This method is *not* reentrant.
+    /// It is a programmer error to call this method from another database
+    /// access method:
+    ///
+    ///     try writer.write { db in
+    ///         // Raises a fatal error
+    ///         try writer.barrierWriteWithoutTransaction { ... )
+    ///     }
     ///
     /// - parameter updates: The updates to the database.
     /// - throws: The error thrown by the updates.
@@ -98,8 +116,6 @@ public protocol DatabaseWriter: DatabaseReader {
     ///
     /// Eventual concurrent reads are guaranteed to not see any partial updates
     /// of the database until the transaction has completed.
-    ///
-    /// This method is *not* reentrant.
     ///
     /// - parameter updates: The updates to the database.
     /// - parameter completion: A closure that is called with the eventual
@@ -167,7 +183,6 @@ public protocol DatabaseWriter: DatabaseReader {
     ///         // Guaranteed to be zero
     ///         let count = try future.wait()
     ///     }
-    @_disfavoredOverload
     func concurrentRead<T>(_ block: @escaping (Database) throws -> T) -> DatabaseFuture<T>
     
     // Exposed for RxGRDB and GRBCombine. Naming is not stabilized.
@@ -223,7 +238,13 @@ extension DatabaseWriter {
     /// Eventual concurrent reads are guaranteed to not see any partial updates
     /// of the database until the transaction has completed.
     ///
-    /// This method is *not* reentrant.
+    /// It is a programmer error to call this method from another database
+    /// access method:
+    ///
+    ///     try writer.write { db in
+    ///         // Raises a fatal error
+    ///         try writer.write { ... )
+    ///     }
     ///
     /// - parameter updates: The updates to the database.
     /// - throws: The error thrown by the updates, or by the
@@ -255,8 +276,6 @@ extension DatabaseWriter {
     ///
     /// Eventual concurrent reads are guaranteed to not see any partial updates
     /// of the database until the transaction has completed.
-    ///
-    /// This method is *not* reentrant.
     ///
     /// - parameter updates: The updates to the database.
     /// - parameter completion: A closure that is called with the eventual
@@ -533,7 +552,28 @@ extension Publisher where Failure == Error {
 #if swift(>=5.5)
 @available(macOS 12, iOS 15, tvOS 15, watchOS 8, *)
 extension DatabaseWriter {
-    public func write<T>(updates: @escaping (Database) throws -> T) async throws -> T {
+    /// Asynchronously executes database updates in a protected dispatch queue,
+    /// wrapped inside a transaction, and returns the result.
+    ///
+    /// If the updates throw an error, the transaction is rollbacked and the
+    /// error is rethrown.
+    ///
+    /// Eventual concurrent database updates are postponed until the transaction
+    /// has completed.
+    ///
+    /// Eventual concurrent reads are guaranteed to not see any partial updates
+    /// of the database until the transaction has completed.
+    ///
+    /// - parameter _ignored: Pass `()`. This parameter is a workaround for
+    ///   https://forums.swift.org/t/async-feedback-overloads-that-differ-only-in-async/49573
+    /// - parameter updates: The updates to the database.
+    /// - throws: The error thrown by the updates, or by the
+    ///   wrapping transaction.
+    public func write<T>(
+        _ignored: Void = (),
+        _ updates: @escaping (Database) throws -> T)
+    async throws -> T
+    {
         try await withUnsafeThrowingContinuation { continuation in
             asyncWrite(updates) { _, result in
                 continuation.resume(with: result)
@@ -541,6 +581,31 @@ extension DatabaseWriter {
         }
     }
     
+    /// Asynchronously executes database updates in a protected dispatch queue,
+    /// wrapped inside a transaction, and then performs a read-only access.
+    ///
+    /// When you use a `DatabasePool`, this method applies a scheduling
+    /// optimization: the `value` function sees the database in the state left
+    /// by the `updates` function, and yet does not block any concurrent writes.
+    /// This can reduce database write contention.
+    ///
+    ///     try await writer.write(
+    ///         updates: { db in try Player(...).insert(db) }
+    ///         thenRead: { db, _ in try Player.fetchCount(db) })
+    ///
+    /// This potential optimization does not affect the behavior of this method.
+    /// It is guaranteed to return exactly the same value as a plain `write`
+    /// which perform updates and reads sequentially:
+    ///
+    ///     // Returns the same value
+    ///     try await writer.write { db in
+    ///         try Player(...).insert(db)
+    ///         return try Player.fetchCount(db)
+    ///     }
+    ///
+    /// - parameter updates: The updates to the database.
+    /// - parameter value: A function that accesses the database.
+    /// - throws: An error that happens while accessing the database.
     public func write<T, Output>(
         updates: @escaping (Database) throws -> T,
         thenRead value: @escaping (Database, T) throws -> Output)
@@ -565,6 +630,62 @@ extension DatabaseWriter {
                     } catch {
                         continuation.resume(throwing: error)
                     }
+                }
+            }
+        }
+    }
+    
+    /// Asynchronously executes database updates in a protected dispatch queue,
+    /// outside of any transaction, and returns the result.
+    ///
+    /// Eventual concurrent database updates are postponed until the updates
+    /// are completed.
+    ///
+    /// Eventual concurrent reads may see partial updates unless you wrap them
+    /// in a transaction.
+    ///
+    /// - parameter _ignored: Pass `()`. This parameter is a workaround for
+    ///   https://forums.swift.org/t/async-feedback-overloads-that-differ-only-in-async/49573
+    /// - parameter updates: The updates to the database.
+    /// - throws: The error thrown by the updates.
+    public func writeWithoutTransaction<T>(
+        _ignored: Void = (),
+        _ updates: @escaping (Database) throws -> T)
+    async throws -> T
+    {
+        try await withUnsafeThrowingContinuation { continuation in
+            asyncWriteWithoutTransaction { db in
+                do {
+                    try continuation.resume(returning: updates(db))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    /// Asynchronously executes database updates in a protected dispatch queue,
+    /// outside of any transaction, and returns the result.
+    ///
+    /// Updates are guaranteed an exclusive access to the database. They wait
+    /// until all pending writes and reads are completed. They postpone all
+    /// other writes and reads until they are completed.
+    ///
+    /// - parameter _ignored: Pass `()`. This parameter is a workaround for
+    ///   https://forums.swift.org/t/async-feedback-overloads-that-differ-only-in-async/49573
+    /// - parameter updates: The updates to the database.
+    /// - throws: The error thrown by the updates.
+    public func barrierWriteWithoutTransaction<T>(
+        _ignored: Void = (),
+        _ updates: @escaping (Database) throws -> T)
+    async throws -> T
+    {
+        try await withUnsafeThrowingContinuation { continuation in
+            asyncBarrierWriteWithoutTransaction { db in
+                do {
+                    try continuation.resume(returning: updates(db))
+                } catch {
+                    continuation.resume(throwing: error)
                 }
             }
         }
@@ -650,6 +771,10 @@ public final class AnyDatabaseWriter: DatabaseWriter {
     
     public func unsafeRead<T>(_ block: (Database) throws -> T) throws -> T {
         try base.unsafeRead(block)
+    }
+    
+    public func asyncUnsafeRead(_ block: @escaping (Result<Database, Error>) -> Void) {
+        base.asyncUnsafeRead(block)
     }
     
     public func unsafeReentrantRead<T>(_ block: (Database) throws -> T) throws -> T {

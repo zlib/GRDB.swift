@@ -108,12 +108,14 @@ extension DatabaseSnapshot {
         serializedDatabase.weakAsync { block($0.map { .success($0) }) }
     }
     
-    /// :nodoc:
     public func unsafeRead<T>(_ block: (Database) throws -> T) rethrows -> T {
         try serializedDatabase.sync(block)
     }
     
-    /// :nodoc:
+    public func asyncUnsafeRead(_ block: @escaping (Result<Database, Error>) -> Void) {
+        serializedDatabase.async { block(.success($0)) }
+    }
+    
     public func unsafeReentrantRead<T>(_ block: (Database) throws -> T) throws -> T {
         try serializedDatabase.reentrantSync(block)
     }

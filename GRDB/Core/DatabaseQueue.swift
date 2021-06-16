@@ -273,10 +273,12 @@ extension DatabaseQueue {
     ///
     /// - parameter block: A block that accesses the database.
     /// - throws: The error thrown by the block.
-    ///
-    /// :nodoc:
     public func unsafeRead<T>(_ block: (Database) throws -> T) rethrows -> T {
         try writer.sync(block)
+    }
+    
+    public func asyncUnsafeRead(_ block: @escaping (Result<Database, Error>) -> Void) {
+        writer.async { block(.success($0)) }
     }
     
     /// Synchronously executes a block in a protected dispatch queue, and
@@ -288,8 +290,6 @@ extension DatabaseQueue {
     ///
     /// This method is reentrant. It is unsafe because it fosters dangerous
     /// concurrency practices.
-    ///
-    /// :nodoc:
     public func unsafeReentrantRead<T>(_ block: (Database) throws -> T) rethrows -> T {
         try writer.reentrantSync(block)
     }
